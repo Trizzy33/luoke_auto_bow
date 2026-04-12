@@ -1,0 +1,46 @@
+name: Build Windows EXE
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-windows-exe:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller keyboard pywin32
+
+      - name: Validate source
+        run: python -m py_compile lk.py
+
+      - name: Build EXE with PyInstaller
+        run: >
+          pyinstaller
+          --noconfirm
+          --clean
+          --onefile
+          --windowed
+          --name lk_auto_bow
+          lk.py
+
+      - name: Upload EXE artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lk_auto_bow-windows-exe
+          path: dist/lk_auto_bow.exe
+          if-no-files-found: error
