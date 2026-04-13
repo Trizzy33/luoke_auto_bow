@@ -16,8 +16,10 @@ I18N = {
     "zh": {
         "window_title": "LK Auto Bow 控制台",
         "hero_title": "LK Auto Bow",
-        "hero_subtitle": "更清晰的参数布局、更舒服的视觉风格，以及中英文一键切换。",
+        "hero_subtitle": "",
         "lang_label": "界面语言",
+        "lang_zh": "中文",
+        "lang_en": "English",
         "status_idle": "空闲：请先绑定游戏窗口。",
         "status_bound": "已停止。游戏窗口已绑定，可点“开始巡逻”。",
         "status_running": "运行中…",
@@ -35,17 +37,25 @@ I18N = {
         "card_window": "窗口与运行",
         "card_position": "虚拟位置",
         "card_position_desc": "x 表示左右，y 表示前后",
+        "stat_window": "窗口",
+        "stat_mode": "状态",
+        "stat_hotkey": "停止热键",
+        "stat_window_bound": "已绑定",
+        "stat_window_unbound": "未绑定",
+        "stat_mode_running": "巡逻中",
+        "stat_mode_idle": "待机",
+        "stat_hotkey_value": "Q / 前台生效",
         "tab_move": "移动",
         "tab_skill": "技能连招",
         "move_intro": "活动范围越大，角色越容易在更大范围内来回；速度越大，每次按键对应的虚拟位移越大。",
         "range_group": "活动范围（虚拟坐标边界）",
         "speed_group": "移动速度系数",
         "interval_group": "巡逻间隔（秒）",
-        "skill_intro": "按顺序执行技能步骤。按键可填 tab / esc / 字母 / 数字；填 wait 表示纯等待。",
+        "skill_intro": "按顺序执行技能步骤。按键可填 tab / esc / 字母 / 数字；填 wait 表示纯等待。可拖拽左侧 Drag 手柄调整顺序。",
         "skill_timing_group": "技能触发节奏",
         "skill_hold_group": "按键按住时长",
         "skill_seq_group": "技能动作序列",
-        "skill_seq_cols": ("按键", "次数", "间隔(秒)"),
+        "skill_seq_cols": ("拖拽", "按键", "次数", "间隔(秒)"),
         "skill_add": "+ 添加一行",
         "skill_remove": "− 删除末行",
         "delete_short": "删",
@@ -75,8 +85,10 @@ I18N = {
     "en": {
         "window_title": "LK Auto Bow Console",
         "hero_title": "LK Auto Bow",
-        "hero_subtitle": "A cleaner layout, a better visual style, and one-click Chinese / English switching.",
+        "hero_subtitle": "",
         "lang_label": "Language",
+        "lang_zh": "中文",
+        "lang_en": "English",
         "status_idle": "Idle: bind the game window first.",
         "status_bound": "Stopped. Game window is bound and ready to start.",
         "status_running": "Running...",
@@ -94,17 +106,25 @@ I18N = {
         "card_window": "Window & Control",
         "card_position": "Virtual Position",
         "card_position_desc": "x = left/right, y = forward/backward",
+        "stat_window": "Window",
+        "stat_mode": "State",
+        "stat_hotkey": "Stop Key",
+        "stat_window_bound": "Bound",
+        "stat_window_unbound": "Unbound",
+        "stat_mode_running": "Patrolling",
+        "stat_mode_idle": "Idle",
+        "stat_hotkey_value": "Q / focused only",
         "tab_move": "Movement",
         "tab_skill": "Skills",
         "move_intro": "A larger range allows wider roaming. Higher speed makes each key press count as more virtual movement.",
         "range_group": "Range (virtual bounds)",
         "speed_group": "Movement speed",
         "interval_group": "Patrol timing (seconds)",
-        "skill_intro": "Steps run from top to bottom. Use tab / esc / letters / numbers, or set key to wait for a delay-only step.",
+        "skill_intro": "Steps run from top to bottom. Use tab / esc / letters / numbers, or set key to wait for a delay-only step. Drag the left Drag handle to reorder rows.",
         "skill_timing_group": "Skill timing",
         "skill_hold_group": "Key hold duration",
         "skill_seq_group": "Skill sequence",
-        "skill_seq_cols": ("Key", "Count", "Gap(s)"),
+        "skill_seq_cols": ("Drag", "Key", "Count", "Gap(s)"),
         "skill_add": "+ Add Row",
         "skill_remove": "- Remove Last",
         "delete_short": "Del",
@@ -697,6 +717,12 @@ class AutomationUI:
         self._skill_rows: List[Dict[str, Any]] = []
         self._skill_rows_container: Optional[ttk.Frame] = None
         self._scale_meta: List[Dict[str, Any]] = []
+        self._dragging_skill_row: Optional[Dict[str, Any]] = None
+        self.metric_vars = {
+            "window": tk.StringVar(),
+            "mode": tk.StringVar(),
+            "hotkey": tk.StringVar(),
+        }
 
         self.pos_var = tk.StringVar(value="0.00, 0.00")
         self._configure_styles()
@@ -712,69 +738,85 @@ class AutomationUI:
         style = ttk.Style()
         style.theme_use("clam")
 
-        style.configure(".", font=("Microsoft YaHei UI", 10), background="#eef3f8")
-        style.configure("Card.TFrame", background="#f8fbff")
+        style.configure(".", font=("Microsoft YaHei UI", 10), background="#f4efe8")
+        style.configure("Card.TFrame", background="#fffaf2")
         style.configure(
             "Hero.TFrame",
-            background="#16324f",
+            background="#102033",
         )
         style.configure(
             "HeroTitle.TLabel",
-            background="#16324f",
+            background="#102033",
             foreground="#ffffff",
-            font=("Segoe UI Semibold", 22),
+            font=("Georgia", 24, "bold"),
         )
         style.configure(
             "HeroSub.TLabel",
-            background="#16324f",
-            foreground="#d8e7f6",
+            background="#102033",
+            foreground="#d7e4ef",
             font=("Microsoft YaHei UI", 10),
         )
         style.configure(
             "SectionTitle.TLabel",
-            background="#f8fbff",
-            foreground="#183b56",
+            background="#fffaf2",
+            foreground="#243447",
             font=("Segoe UI Semibold", 11),
         )
         style.configure(
             "Hint.TLabel",
-            background="#f8fbff",
-            foreground="#5f7388",
+            background="#fffaf2",
+            foreground="#6b7280",
         )
         style.configure(
             "Status.TLabel",
-            background="#dff1ff",
-            foreground="#114a72",
+            background="#fff1d6",
+            foreground="#7a4b00",
             font=("Microsoft YaHei UI", 10),
-            padding=10,
+            padding=12,
         )
         style.configure(
             "Primary.TButton",
             font=("Segoe UI Semibold", 10),
-            padding=(12, 8),
+            padding=(14, 10),
+            borderwidth=0,
         )
         style.map(
             "Primary.TButton",
-            background=[("active", "#2c78b8"), ("!disabled", "#225d91")],
+            background=[("active", "#ef7d32"), ("!disabled", "#d8611f")],
             foreground=[("!disabled", "#ffffff")],
         )
         style.configure(
             "Secondary.TButton",
             font=("Microsoft YaHei UI", 10),
-            padding=(10, 8),
+            padding=(12, 10),
+            background="#fffaf2",
+            foreground="#243447",
+            bordercolor="#d8c9b2",
         )
-        style.configure("TLabelframe", background="#f8fbff", borderwidth=1)
+        style.map(
+            "Secondary.TButton",
+            background=[("active", "#f5e6d1"), ("!disabled", "#fffaf2")],
+        )
+        style.configure("TLabelframe", background="#fffaf2", borderwidth=1, relief="solid")
         style.configure(
             "TLabelframe.Label",
-            background="#f8fbff",
-            foreground="#183b56",
+            background="#fffaf2",
+            foreground="#243447",
             font=("Segoe UI Semibold", 10),
         )
-        style.configure("TNotebook", background="#eef3f8", borderwidth=0)
-        style.configure("TNotebook.Tab", padding=(14, 8), font=("Segoe UI", 10))
+        style.configure("TNotebook", background="#f4efe8", borderwidth=0, tabmargins=(0, 0, 0, 0))
+        style.configure(
+            "TNotebook.Tab",
+            padding=(18, 10),
+            font=("Segoe UI Semibold", 10),
+            background="#eadfce",
+            foreground="#4b5563",
+            borderwidth=0,
+        )
         style.map(
             "TNotebook.Tab",
-            background=[("selected", "#ffffff"), ("!selected", "#d9e8f4")],
+            background=[("selected", "#102033"), ("!selected", "#eadfce")],
+            foreground=[("selected", "#ffffff"), ("!selected", "#4b5563")],
         )
 
     def _build_layout(self):
@@ -782,27 +824,50 @@ class AutomationUI:
         outer = ttk.Frame(self.root, padding=16, style="Card.TFrame")
         outer.pack(fill=tk.BOTH, expand=True)
 
-        hero = ttk.Frame(outer, padding=18, style="Hero.TFrame")
+        hero = tk.Frame(outer, bg="#102033", padx=22, pady=22, highlightthickness=0)
         hero.pack(fill=tk.X, pady=(0, 14))
+        accent_bar = tk.Frame(hero, bg="#f08a24", height=4)
+        accent_bar.pack(fill=tk.X, pady=(0, 14))
         self.hero_title_label = ttk.Label(hero, style="HeroTitle.TLabel")
         self.hero_title_label.pack(anchor=tk.W)
-        top_line = ttk.Frame(hero, style="Hero.TFrame")
-        top_line.pack(fill=tk.X, pady=(6, 0))
+        top_line = tk.Frame(hero, bg="#102033")
+        top_line.pack(fill=tk.X, pady=(8, 0))
         self.hero_subtitle_label = ttk.Label(top_line, style="HeroSub.TLabel")
         self.hero_subtitle_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        lang_box = ttk.Frame(top_line, style="Hero.TFrame")
+        lang_box = tk.Frame(top_line, bg="#102033")
         lang_box.pack(side=tk.RIGHT)
         self.lang_label = ttk.Label(lang_box, style="HeroSub.TLabel")
         self.lang_label.pack(side=tk.LEFT, padx=(0, 8))
-        self.lang_combo = ttk.Combobox(
+        self.lang_zh_button = tk.Button(
             lang_box,
-            textvariable=self.current_lang,
-            values=["zh", "en"],
-            state="readonly",
-            width=8,
+            bd=0,
+            relief="flat",
+            padx=12,
+            pady=6,
+            cursor="hand2",
+            command=lambda: self._set_lang("zh"),
         )
-        self.lang_combo.pack(side=tk.LEFT)
-        self.lang_combo.bind("<<ComboboxSelected>>", lambda _e: self._refresh_text())
+        self.lang_zh_button.pack(side=tk.LEFT, padx=(0, 6))
+        self.lang_en_button = tk.Button(
+            lang_box,
+            bd=0,
+            relief="flat",
+            padx=12,
+            pady=6,
+            cursor="hand2",
+            command=lambda: self._set_lang("en"),
+        )
+        self.lang_en_button.pack(side=tk.LEFT)
+
+        metrics_row = tk.Frame(hero, bg="#102033")
+        metrics_row.pack(fill=tk.X, pady=(16, 0))
+        self.metric_cards = {}
+        self.metric_cards["window"] = self._make_metric_card(metrics_row)
+        self.metric_cards["window"]["frame"].pack(side=tk.LEFT, padx=(0, 10))
+        self.metric_cards["mode"] = self._make_metric_card(metrics_row)
+        self.metric_cards["mode"]["frame"].pack(side=tk.LEFT, padx=(0, 10))
+        self.metric_cards["hotkey"] = self._make_metric_card(metrics_row)
+        self.metric_cards["hotkey"]["frame"].pack(side=tk.LEFT)
 
         self.status_label = ttk.Label(
             outer,
@@ -855,7 +920,6 @@ class AutomationUI:
         self.position_title.pack(anchor=tk.W, padx=10, pady=(10, 2))
         self.position_desc = ttk.Label(pos_f, style="Hint.TLabel")
         self.position_desc.pack(anchor=tk.W, padx=10, pady=(0, 4))
-        pos_f.pack(fill=tk.X, **pad)
         ttk.Label(pos_f, textvariable=self.pos_var, font=("Consolas", 18)).pack(
             anchor=tk.W, padx=8, pady=6
         )
@@ -880,28 +944,28 @@ class AutomationUI:
         nb.pack(fill=tk.BOTH, expand=True, **pad)
         self.notebook = nb
 
-        tab_move = ttk.Frame(nb, padding=4)
+        tab_move, tab_move_body = self._create_scrollable_tab(nb)
         nb.add(tab_move, text="")
         self.tab_move = tab_move
         self.move_intro_label = ttk.Label(
-            tab_move,
+            tab_move_body,
             wraplength=400,
             style="Hint.TLabel",
         )
         self.move_intro_label.pack(fill=tk.X, **pad)
-        rng = ttk.LabelFrame(tab_move)
+        rng = ttk.LabelFrame(tab_move_body)
         rng.pack(fill=tk.X, **pad)
         self.range_group = rng
         add_scale(rng, "max_x", "scale_max_x", 0.3, 4.0)
         add_scale(rng, "max_y", "scale_max_y", 0.3, 4.0)
 
-        spd = ttk.LabelFrame(tab_move)
+        spd = ttk.LabelFrame(tab_move_body)
         spd.pack(fill=tk.X, **pad)
         self.speed_group = spd
         add_scale(spd, "side_speed", "scale_side_speed", 1.0, 30.0)
         add_scale(spd, "forward_speed", "scale_forward_speed", 1.0, 30.0)
 
-        iv = ttk.LabelFrame(tab_move)
+        iv = ttk.LabelFrame(tab_move_body)
         iv.pack(fill=tk.X, **pad)
         self.interval_group = iv
         add_scale(iv, "loop_wait_min", "scale_loop_wait_min", 3.0, 120.0)
@@ -920,32 +984,109 @@ class AutomationUI:
         add_scale(iv, "patrol_no_move_idle_min", "scale_patrol_no_move_idle_min", 0.05, 2.0)
         add_scale(iv, "patrol_no_move_idle_max", "scale_patrol_no_move_idle_max", 0.05, 4.0)
 
-        tab_skill = ttk.Frame(nb, padding=4)
+        tab_skill, tab_skill_body = self._create_scrollable_tab(nb)
         nb.add(tab_skill, text="")
         self.tab_skill = tab_skill
         self.skill_intro_label = ttk.Label(
-            tab_skill,
+            tab_skill_body,
             wraplength=400,
             style="Hint.TLabel",
         )
         self.skill_intro_label.pack(fill=tk.X, **pad)
-        sk_iv = ttk.LabelFrame(tab_skill)
+        sk_iv = ttk.LabelFrame(tab_skill_body)
         sk_iv.pack(fill=tk.X, **pad)
         self.skill_timing_group = sk_iv
         add_scale(sk_iv, "skill_interval", "scale_skill_interval", 3.0, 120.0)
 
-        sk_hold = ttk.LabelFrame(tab_skill)
+        sk_hold = ttk.LabelFrame(tab_skill_body)
         sk_hold.pack(fill=tk.X, **pad)
         self.skill_hold_group = sk_hold
         add_scale(sk_hold, "skill_key_hold", "scale_skill_key_hold", 0.05, 0.35)
 
-        self._build_skill_sequence_editor(tab_skill, pad)
+        self._build_skill_sequence_editor(tab_skill_body, pad)
 
         self.quick_hint_label = ttk.Label(
             outer,
             style="Hint.TLabel",
         )
         self.quick_hint_label.pack(anchor=tk.W, **pad)
+
+    def _make_metric_card(self, parent):
+        frame = tk.Frame(parent, bg="#1a3148", padx=12, pady=10)
+        title = tk.Label(
+            frame,
+            bg="#1a3148",
+            fg="#9fb7ca",
+            font=("Segoe UI", 9),
+        )
+        title.pack(anchor=tk.W)
+        value = tk.Label(
+            frame,
+            bg="#1a3148",
+            fg="#ffffff",
+            font=("Segoe UI Semibold", 11),
+        )
+        value.pack(anchor=tk.W, pady=(3, 0))
+        return {"frame": frame, "title": title, "value": value}
+
+    def _create_scrollable_tab(self, notebook):
+        tab = ttk.Frame(notebook, padding=0)
+        canvas = tk.Canvas(tab, highlightthickness=0, bg="#fffaf2")
+        scrollbar = ttk.Scrollbar(tab, orient=tk.VERTICAL, command=canvas.yview)
+        body = ttk.Frame(canvas, padding=4, style="Card.TFrame")
+
+        body.bind(
+            "<Configure>",
+            lambda _e: canvas.configure(scrollregion=canvas.bbox("all")),
+        )
+        canvas_window = canvas.create_window((0, 0), window=body, anchor=tk.NW)
+        canvas.bind(
+            "<Configure>",
+            lambda e: canvas.itemconfig(canvas_window, width=e.width),
+        )
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        def _on_mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        canvas.bind("<Enter>", lambda _e: canvas.bind_all("<MouseWheel>", _on_mousewheel))
+        canvas.bind("<Leave>", lambda _e: canvas.unbind_all("<MouseWheel>"))
+
+        return tab, body
+
+    def _style_lang_button(self, button, active: bool):
+        if active:
+            button.configure(
+                bg="#f08a24",
+                fg="#ffffff",
+                activebackground="#f08a24",
+                activeforeground="#ffffff",
+            )
+        else:
+            button.configure(
+                bg="#22384e",
+                fg="#d7e4ef",
+                activebackground="#304961",
+                activeforeground="#ffffff",
+            )
+
+    def _set_lang(self, lang: str):
+        if self.current_lang.get() == lang:
+            return
+        self.current_lang.set(lang)
+        self._refresh_text()
+
+    def _update_header_metrics(self):
+        self.metric_vars["window"].set(
+            self._t("stat_window_bound") if self.auto.game_hwnd else self._t("stat_window_unbound")
+        )
+        self.metric_vars["mode"].set(
+            self._t("stat_mode_running") if self.auto.running else self._t("stat_mode_idle")
+        )
+        self.metric_vars["hotkey"].set(self._t("stat_hotkey_value"))
 
     def _build_skill_sequence_editor(self, parent, pad):
         """可编辑技能步骤：按键、次数、间隔；+ / − 增删行。"""
@@ -955,6 +1096,8 @@ class AutomationUI:
 
         head = ttk.Frame(box)
         head.pack(fill=tk.X, padx=4, pady=(4, 2))
+        self.skill_col_drag = ttk.Label(head, width=8)
+        self.skill_col_drag.pack(side=tk.LEFT, padx=(0, 4))
         self.skill_col_key = ttk.Label(head, width=12)
         self.skill_col_key.pack(side=tk.LEFT, padx=(0, 4))
         self.skill_col_times = ttk.Label(head, width=6)
@@ -1021,6 +1164,17 @@ class AutomationUI:
         t_var = tk.StringVar(value=str(int(times)))
         g_var = tk.StringVar(value=str(gap))
 
+        drag_handle = tk.Label(
+            f,
+            text="Drag",
+            width=7,
+            bg="#eadfce",
+            fg="#243447",
+            cursor="fleur",
+            padx=4,
+            pady=3,
+        )
+        drag_handle.pack(side=tk.LEFT, padx=(0, 4))
         ent_k = ttk.Entry(f, textvariable=k_var, width=14)
         ent_k.pack(side=tk.LEFT, padx=(0, 4))
         ent_t = ttk.Entry(f, textvariable=t_var, width=6)
@@ -1030,6 +1184,7 @@ class AutomationUI:
 
         row: Dict[str, Any] = {
             "frame": f,
+            "drag_handle": drag_handle,
             "key": k_var,
             "times": t_var,
             "gap": g_var,
@@ -1044,6 +1199,9 @@ class AutomationUI:
         delete_btn.pack(side=tk.RIGHT)
         self._skill_rows.append(row)
         row["delete_btn"] = delete_btn
+        drag_handle.bind("<ButtonPress-1>", lambda event, r=row: self._start_skill_drag(r, event))
+        drag_handle.bind("<B1-Motion>", self._on_skill_drag_motion)
+        drag_handle.bind("<ButtonRelease-1>", self._end_skill_drag)
         self._refresh_skill_row_labels()
 
     def _skill_add_row_default(self):
@@ -1059,11 +1217,56 @@ class AutomationUI:
         for row in list(self._skill_rows):
             row["frame"].destroy()
         self._skill_rows.clear()
+        self._dragging_skill_row = None
 
     def _refresh_skill_row_labels(self):
         delete_text = self._t("delete_short")
         for row in self._skill_rows:
             row["delete_btn"].configure(text=delete_text)
+
+    def _repack_skill_rows(self):
+        for row in self._skill_rows:
+            row["frame"].pack_forget()
+        for row in self._skill_rows:
+            row["frame"].pack(fill=tk.X, pady=1)
+        self._skill_canvas.configure(scrollregion=self._skill_canvas.bbox("all"))
+
+    def _start_skill_drag(self, row: Dict[str, Any], _event):
+        self._dragging_skill_row = row
+        row["drag_handle"].configure(bg="#d8611f", fg="#ffffff")
+
+    def _on_skill_drag_motion(self, event):
+        if self._dragging_skill_row is None or not self._skill_rows:
+            return
+
+        pointer_y = event.widget.winfo_pointery()
+        remaining_rows = [row for row in self._skill_rows if row is not self._dragging_skill_row]
+        target_index = len(remaining_rows)
+
+        for idx, row in enumerate(remaining_rows):
+            mid_y = row["frame"].winfo_rooty() + (row["frame"].winfo_height() / 2)
+            if pointer_y < mid_y:
+                target_index = idx
+                break
+
+        new_rows = list(remaining_rows)
+        new_rows.insert(target_index, self._dragging_skill_row)
+        if new_rows != self._skill_rows:
+            self._skill_rows = new_rows
+            self._repack_skill_rows()
+
+        canvas_top = self._skill_canvas.winfo_rooty()
+        canvas_bottom = canvas_top + self._skill_canvas.winfo_height()
+        if pointer_y < canvas_top + 24:
+            self._skill_canvas.yview_scroll(-1, "units")
+        elif pointer_y > canvas_bottom - 24:
+            self._skill_canvas.yview_scroll(1, "units")
+
+    def _end_skill_drag(self, _event):
+        if self._dragging_skill_row is None:
+            return
+        self._dragging_skill_row["drag_handle"].configure(bg="#eadfce", fg="#243447")
+        self._dragging_skill_row = None
 
     def _skill_load_from_automation_defaults(self):
         self._skill_clear_all_rows()
@@ -1122,6 +1325,7 @@ class AutomationUI:
             self.status_var.set(self._t("status_running"))
         elif self.auto.game_hwnd:
             self.status_var.set(self._t("status_bound"))
+        self._update_header_metrics()
         self.root.after(120, self._tick)
 
     def _on_bind(self):
@@ -1194,6 +1398,10 @@ class AutomationUI:
         self.hero_title_label.configure(text=self._t("hero_title"))
         self.hero_subtitle_label.configure(text=self._t("hero_subtitle"))
         self.lang_label.configure(text=self._t("lang_label"))
+        self.lang_zh_button.configure(text=self._t("lang_zh"))
+        self.lang_en_button.configure(text=self._t("lang_en"))
+        self._style_lang_button(self.lang_zh_button, self.current_lang.get() == "zh")
+        self._style_lang_button(self.lang_en_button, self.current_lang.get() == "en")
         self.virtual_hint_label.configure(text=self._t("hint_virtual"))
         self.control_title.configure(text=self._t("card_window"))
         self.bind_button.configure(text=self._t("btn_bind"))
@@ -1213,15 +1421,23 @@ class AutomationUI:
         self.skill_hold_group.configure(text=self._t("skill_hold_group"))
         self.skill_seq_group.configure(text=self._t("skill_seq_group"))
         cols = self._t("skill_seq_cols")
-        self.skill_col_key.configure(text=cols[0])
-        self.skill_col_times.configure(text=cols[1])
-        self.skill_col_gap.configure(text=cols[2])
+        self.skill_col_drag.configure(text=cols[0])
+        self.skill_col_key.configure(text=cols[1])
+        self.skill_col_times.configure(text=cols[2])
+        self.skill_col_gap.configure(text=cols[3])
         self.skill_add_button.configure(text=self._t("skill_add"))
         self.skill_remove_button.configure(text=self._t("skill_remove"))
         self.quick_hint_label.configure(text=self._t("quick_hint"))
+        self.metric_cards["window"]["title"].configure(text=self._t("stat_window"))
+        self.metric_cards["mode"]["title"].configure(text=self._t("stat_mode"))
+        self.metric_cards["hotkey"]["title"].configure(text=self._t("stat_hotkey"))
+        self.metric_cards["window"]["value"].configure(textvariable=self.metric_vars["window"])
+        self.metric_cards["mode"]["value"].configure(textvariable=self.metric_vars["mode"])
+        self.metric_cards["hotkey"]["value"].configure(textvariable=self.metric_vars["hotkey"])
         for meta in self._scale_meta:
             meta["widget"].configure(text=self._t(meta["text_key"]))
         self._refresh_skill_row_labels()
+        self._update_header_metrics()
         if not self.auto.running:
             if self.auto.game_hwnd:
                 self.status_var.set(self._t("status_bound"))
