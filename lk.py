@@ -1,6 +1,7 @@
 import time
 import random
 import threading
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 import tkinter as tk
@@ -53,11 +54,12 @@ I18N = {
         "speed_group": "移动速度系数",
         "interval_group": "巡逻间隔（秒）",
         "rethrow_group": "重扔精灵",
-        "rethrow_intro": "手动点击按钮可立刻执行一次。自动重扔开启后，会按 1 到 6 依次按键并左键点击，把精灵重新扔一遍。",
+        "rethrow_intro": "手动点击按钮可立刻执行一次。自动重扔开启后，会按 1 到 6 依次按键，随机等待后发送一次左键，再随机等待更长一点切下一只。",
         "scale_rethrow_interval_hours": "自动重扔间隔(小时)",
-        "scale_rethrow_key_hold": "切换按键时长",
+        "scale_rethrow_key_hold": "左键按住时长",
         "scale_rethrow_click_gap": "按键后点击等待",
         "scale_rethrow_slot_gap": "每只精灵间隔",
+        "scale_rethrow_rand_factor": "随机偏移系数",
         "skill_intro": "按顺序执行技能步骤。按键可填 tab / esc / 字母 / 数字；填 wait 表示纯等待。可拖拽左侧 Drag 手柄调整顺序。",
         "skill_timing_group": "技能触发节奏",
         "skill_hold_group": "按键按住时长",
@@ -78,7 +80,7 @@ I18N = {
         "status_rethrowing": "正在重扔精灵…",
         "status_rethrow_done": "已完成一轮重扔精灵。",
         "status_rethrow_busy": "已有重扔任务在执行，跳过本次请求。",
-        "status_rethrow_failed": "重扔精灵未完成，请检查窗口和鼠标落点。",
+        "status_rethrow_failed": "重扔精灵未完成，请检查绑定窗口和点击落点。",
         "scale_max_x": "左右最大偏移",
         "scale_max_y": "前后最大偏移",
         "scale_side_speed": "左右 A/D 速度",
@@ -135,11 +137,12 @@ I18N = {
         "speed_group": "Movement speed",
         "interval_group": "Patrol timing (seconds)",
         "rethrow_group": "Pet Rethrow",
-        "rethrow_intro": "Use the button to trigger it immediately. Auto rethrow will press 1 through 6 and left-click after each one to throw every pet again.",
+        "rethrow_intro": "Use the button to trigger it immediately. Auto rethrow will press 1 through 6, wait a bit, send one left-click, then wait longer before moving to the next pet.",
         "scale_rethrow_interval_hours": "Auto rethrow interval (hours)",
-        "scale_rethrow_key_hold": "Key hold time",
+        "scale_rethrow_key_hold": "Left click hold",
         "scale_rethrow_click_gap": "Wait before click",
         "scale_rethrow_slot_gap": "Gap between pets",
+        "scale_rethrow_rand_factor": "Random offset factor",
         "skill_intro": "Steps run from top to bottom. Use tab / esc / letters / numbers, or set key to wait for a delay-only step. Drag the left Drag handle to reorder rows.",
         "skill_timing_group": "Skill timing",
         "skill_hold_group": "Key hold duration",
@@ -180,6 +183,14 @@ I18N = {
 }
 
 
+@dataclass
+class RethrowTimingPlan:
+    key_hold: float
+    click_delay: float
+    click_hold: float
+    slot_delay: float
+
+
 class GameAutomation:
     def __init__(self):
         self.game_hwnd = None
@@ -196,9 +207,10 @@ class GameAutomation:
         # 重扔精灵：按 1~6 并在每次按键后补一个左键点击
         self.rethrow_sequence = ["1", "2", "3", "4", "5", "6"]
         self.rethrow_interval_hours = 0.0
-        self.rethrow_key_hold_time = 0.08
-        self.rethrow_click_gap = 0.15
-        self.rethrow_slot_gap = 0.35
+        self.rethrow_click_gap = 0.5
+        self.rethrow_slot_gap = 1.0
+        self.rethrow_click_hold_time = 0.3
+        self.rethrow_rand_factor = 0.3
         # 技能序列：每项 dict 含 key / times / gap（见 perform_skill_combo）
         self.skill_steps: List[Dict[str, Any]] = [
             {"key": "tab", "times": 1, "gap": 0.0},
@@ -257,6 +269,28 @@ class GameAutomation:
             a, b = b, a
         return random.uniform(a, b)
 
+    def _rand_with_factor(self, base: float, factor: float, floor: float = 0.0) -> float:
+        base = float(base)
+        factor = max(0.0, float(factor))
+        delta = abs(base) * factor
+        lo = max(floor, base - delta)
+        hi = max(floor, base + delta)
+        return self._rand_uniform_range(lo, hi)
+
+    def build_rethrow_timing_plan(self) -> RethrowTimingPlan:
+        return RethrowTimingPlan(
+            key_hold=self._rand_with_factor(0.12, self.rethrow_rand_factor, 0.03),
+            click_delay=self._rand_with_factor(
+                self.rethrow_click_gap, self.rethrow_rand_factor, 0.0
+            ),
+            click_hold=self._rand_with_factor(
+                self.rethrow_click_hold_time, self.rethrow_rand_factor, 0.01
+            ),
+            slot_delay=self._rand_with_factor(
+                self.rethrow_slot_gap, self.rethrow_rand_factor, 0.0
+            ),
+        )
+
     # =========================
     # 基础工具
     # =========================
@@ -297,30 +331,33 @@ class GameAutomation:
             print(f"发送按键失败 {key}: {e}")
             return False
 
-    def send_left_click_to_window(self, screen_point=None):
+    def send_left_click_to_window(self, client_point=None, hold_time=None):
         if not self.game_hwnd:
             print("还没有选中游戏窗口")
             return False
 
         try:
-            if screen_point is None:
-                screen_point = win32gui.GetCursorPos()
+            self.set_foreground()
+            time.sleep(0.08)
 
-            left, top, right, bottom = win32gui.GetWindowRect(self.game_hwnd)
-            sx, sy = screen_point
-            if not (left <= sx <= right and top <= sy <= bottom):
-                sx = int((left + right) / 2)
-                sy = int((top + bottom) / 2)
+            if client_point is None:
+                left, top, right, bottom = win32gui.GetClientRect(self.game_hwnd)
+                cx = max(1, int((right - left) / 2))
+                cy = max(1, int((bottom - top) / 2))
+            else:
+                cx, cy = client_point
 
-            cx, cy = win32gui.ScreenToClient(self.game_hwnd, (sx, sy))
-            lparam = win32api.MAKELONG(cx, cy)
-            win32api.PostMessage(
-                self.game_hwnd, win32con.WM_LBUTTONDOWN, win32con.MK_LBUTTON, lparam
-            )
-            time.sleep(0.03)
-            win32api.PostMessage(
-                self.game_hwnd, win32con.WM_LBUTTONUP, 0, lparam
-            )
+            sx, sy = win32gui.ClientToScreen(self.game_hwnd, (cx, cy))
+            original_pos = win32api.GetCursorPos()
+
+            win32api.SetCursorPos((sx, sy))
+            time.sleep(0.04)
+            actual_hold = self.rethrow_click_hold_time if hold_time is None else hold_time
+            win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+            time.sleep(actual_hold)
+            win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+            time.sleep(0.08)
+            win32api.SetCursorPos(original_pos)
             return True
         except Exception as e:
             print(f"发送鼠标左键失败: {e}")
@@ -579,18 +616,10 @@ class GameAutomation:
             return None
 
         try:
-            click_point = win32gui.GetCursorPos()
             allow_stop_check = self.running
             for key in self.rethrow_sequence:
-                if allow_stop_check and self.should_stop():
-                    return False
-                if not self.send_key_to_window(key, self.rethrow_key_hold_time):
-                    return False
-                if not self.controlled_sleep(self.rethrow_click_gap, allow_stop_check):
-                    return False
-                if not self.send_left_click_to_window(click_point):
-                    return False
-                if not self.controlled_sleep(self.rethrow_slot_gap, allow_stop_check):
+                plan = self.build_rethrow_timing_plan()
+                if not self.perform_single_rethrow_step(key, plan, allow_stop_check):
                     return False
 
             self.last_rethrow_time = time.time()
@@ -602,6 +631,21 @@ class GameAutomation:
         if not self.is_rethrow_due():
             return False
         return self.perform_rethrow_all_pets()
+
+    def perform_single_rethrow_step(
+        self, key: str, plan: RethrowTimingPlan, allow_stop_check: bool
+    ) -> bool:
+        if allow_stop_check and self.should_stop():
+            return False
+        if not self.send_key_to_window(key, plan.key_hold):
+            return False
+        if not self.controlled_sleep(plan.click_delay, allow_stop_check):
+            return False
+        if not self.send_left_click_to_window(hold_time=plan.click_hold):
+            return False
+        if not self.controlled_sleep(plan.slot_delay, allow_stop_check):
+            return False
+        return True
 
     def wait_with_checks(self, total_wait):
         elapsed = 0.0
@@ -770,29 +814,37 @@ class GameAutomation:
 
 def _apply_scale_vars_to_automation(auto, vars_bundle):
     """从界面变量同步到自动化实例（主线程调用）。"""
-    auto.max_x_offset = float(vars_bundle["max_x"].get())
-    auto.max_y_offset = float(vars_bundle["max_y"].get())
-    auto.side_speed_factor = float(vars_bundle["side_speed"].get())
-    auto.forward_speed_factor = float(vars_bundle["forward_speed"].get())
-    auto.loop_wait_min = float(vars_bundle["loop_wait_min"].get())
-    auto.loop_wait_max = float(vars_bundle["loop_wait_max"].get())
+    plain_mappings = {
+        "max_x": "max_x_offset",
+        "max_y": "max_y_offset",
+        "side_speed": "side_speed_factor",
+        "forward_speed": "forward_speed_factor",
+        "loop_wait_min": "loop_wait_min",
+        "loop_wait_max": "loop_wait_max",
+        "patrol_pause_min": "patrol_pause_min",
+        "patrol_pause_max": "patrol_pause_max",
+        "patrol_center_idle_min": "patrol_center_idle_min",
+        "patrol_center_idle_max": "patrol_center_idle_max",
+        "patrol_no_move_idle_min": "patrol_no_move_idle_min",
+        "patrol_no_move_idle_max": "patrol_no_move_idle_max",
+        "skill_interval": "skill_interval",
+        "skill_key_hold": "skill_key_hold_time",
+    }
+    for var_key, attr_name in plain_mappings.items():
+        setattr(auto, attr_name, float(vars_bundle[var_key].get()))
+
     auto.check_step = max(0.05, float(vars_bundle["check_step"].get()))
-    auto.patrol_pause_min = float(vars_bundle["patrol_pause_min"].get())
-    auto.patrol_pause_max = float(vars_bundle["patrol_pause_max"].get())
-    auto.patrol_center_idle_min = float(vars_bundle["patrol_center_idle_min"].get())
-    auto.patrol_center_idle_max = float(vars_bundle["patrol_center_idle_max"].get())
-    auto.patrol_no_move_idle_min = float(
-        vars_bundle["patrol_no_move_idle_min"].get()
+    auto.rethrow_interval_hours = max(
+        0.0, float(vars_bundle["rethrow_interval_hours"].get())
     )
-    auto.patrol_no_move_idle_max = float(
-        vars_bundle["patrol_no_move_idle_max"].get()
+    auto.rethrow_click_hold_time = max(
+        0.01, float(vars_bundle["rethrow_key_hold"].get())
     )
-    auto.skill_interval = float(vars_bundle["skill_interval"].get())
-    auto.skill_key_hold_time = float(vars_bundle["skill_key_hold"].get())
-    auto.rethrow_interval_hours = max(0.0, float(vars_bundle["rethrow_interval_hours"].get()))
-    auto.rethrow_key_hold_time = max(0.01, float(vars_bundle["rethrow_key_hold"].get()))
     auto.rethrow_click_gap = max(0.0, float(vars_bundle["rethrow_click_gap"].get()))
     auto.rethrow_slot_gap = max(0.0, float(vars_bundle["rethrow_slot_gap"].get()))
+    auto.rethrow_rand_factor = max(
+        0.0, float(vars_bundle["rethrow_rand_factor"].get())
+    )
 
 
 class AutomationUI:
@@ -836,9 +888,10 @@ class AutomationUI:
             "skill_interval": tk.DoubleVar(value=self.auto.skill_interval),
             "skill_key_hold": tk.DoubleVar(value=self.auto.skill_key_hold_time),
             "rethrow_interval_hours": tk.DoubleVar(value=self.auto.rethrow_interval_hours),
-            "rethrow_key_hold": tk.DoubleVar(value=self.auto.rethrow_key_hold_time),
+            "rethrow_key_hold": tk.DoubleVar(value=self.auto.rethrow_click_hold_time),
             "rethrow_click_gap": tk.DoubleVar(value=self.auto.rethrow_click_gap),
             "rethrow_slot_gap": tk.DoubleVar(value=self.auto.rethrow_slot_gap),
+            "rethrow_rand_factor": tk.DoubleVar(value=self.auto.rethrow_rand_factor),
         }
 
         self._skill_rows: List[Dict[str, Any]] = []
@@ -1127,9 +1180,10 @@ class AutomationUI:
         )
         self.rethrow_intro_label.pack(fill=tk.X, padx=10, pady=(8, 4))
         add_scale(rt, "rethrow_interval_hours", "scale_rethrow_interval_hours", 0.0, 12.0)
-        add_scale(rt, "rethrow_key_hold", "scale_rethrow_key_hold", 0.02, 0.3)
+        add_scale(rt, "rethrow_key_hold", "scale_rethrow_key_hold", 0.02, 0.8)
         add_scale(rt, "rethrow_click_gap", "scale_rethrow_click_gap", 0.0, 1.0)
         add_scale(rt, "rethrow_slot_gap", "scale_rethrow_slot_gap", 0.0, 2.0)
+        add_scale(rt, "rethrow_rand_factor", "scale_rethrow_rand_factor", 0.0, 1.0)
 
         tab_skill, tab_skill_body = self._create_scrollable_tab(nb)
         nb.add(tab_skill, text="")
