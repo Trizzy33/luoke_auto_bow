@@ -1,5 +1,8 @@
 name: Build Windows EXE
 
+permissions:
+  contents: write
+
 on:
   push:
     branches:
@@ -44,3 +47,14 @@ jobs:
           name: lk_auto_bow-windows-exe
           path: dist/lk_auto_bow.exe
           if-no-files-found: error
+
+      - name: Create GitHub release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: LK Auto Bow build-${{ github.run_number }}
+          body: |
+            Automated Windows build for commit ${{ github.sha }}.
+          files: dist/lk_auto_bow.exe
+          generate_release_notes: true

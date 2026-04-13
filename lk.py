@@ -34,6 +34,7 @@ I18N = {
         "btn_start": "开始巡逻",
         "btn_stop": "停止",
         "btn_reset": "重置虚拟坐标",
+        "btn_rethrow": "一键重扔精灵",
         "card_window": "窗口与运行",
         "card_position": "虚拟位置",
         "card_position_desc": "x 表示左右，y 表示前后",
@@ -51,6 +52,12 @@ I18N = {
         "range_group": "活动范围（虚拟坐标边界）",
         "speed_group": "移动速度系数",
         "interval_group": "巡逻间隔（秒）",
+        "rethrow_group": "重扔精灵",
+        "rethrow_intro": "手动点击按钮可立刻执行一次。自动重扔开启后，会按 1 到 6 依次按键并左键点击，把精灵重新扔一遍。",
+        "scale_rethrow_interval_hours": "自动重扔间隔(小时)",
+        "scale_rethrow_key_hold": "切换按键时长",
+        "scale_rethrow_click_gap": "按键后点击等待",
+        "scale_rethrow_slot_gap": "每只精灵间隔",
         "skill_intro": "按顺序执行技能步骤。按键可填 tab / esc / 字母 / 数字；填 wait 表示纯等待。可拖拽左侧 Drag 手柄调整顺序。",
         "skill_timing_group": "技能触发节奏",
         "skill_hold_group": "按键按住时长",
@@ -66,6 +73,12 @@ I18N = {
         "info_worker_body": "后台线程仍在运行中。",
         "warn_skill_title": "技能序列无效",
         "warn_skill_body": "请至少保留一个有效步骤：非空按键，或间隔大于 0 的 wait。",
+        "warn_rethrow_title": "无法重扔",
+        "warn_rethrow_body": "请先绑定游戏窗口。",
+        "status_rethrowing": "正在重扔精灵…",
+        "status_rethrow_done": "已完成一轮重扔精灵。",
+        "status_rethrow_busy": "已有重扔任务在执行，跳过本次请求。",
+        "status_rethrow_failed": "重扔精灵未完成，请检查窗口和鼠标落点。",
         "scale_max_x": "左右最大偏移",
         "scale_max_y": "前后最大偏移",
         "scale_side_speed": "左右 A/D 速度",
@@ -103,6 +116,7 @@ I18N = {
         "btn_start": "Start Patrol",
         "btn_stop": "Stop",
         "btn_reset": "Reset Position",
+        "btn_rethrow": "Rethrow Pets",
         "card_window": "Window & Control",
         "card_position": "Virtual Position",
         "card_position_desc": "x = left/right, y = forward/backward",
@@ -120,6 +134,12 @@ I18N = {
         "range_group": "Range (virtual bounds)",
         "speed_group": "Movement speed",
         "interval_group": "Patrol timing (seconds)",
+        "rethrow_group": "Pet Rethrow",
+        "rethrow_intro": "Use the button to trigger it immediately. Auto rethrow will press 1 through 6 and left-click after each one to throw every pet again.",
+        "scale_rethrow_interval_hours": "Auto rethrow interval (hours)",
+        "scale_rethrow_key_hold": "Key hold time",
+        "scale_rethrow_click_gap": "Wait before click",
+        "scale_rethrow_slot_gap": "Gap between pets",
         "skill_intro": "Steps run from top to bottom. Use tab / esc / letters / numbers, or set key to wait for a delay-only step. Drag the left Drag handle to reorder rows.",
         "skill_timing_group": "Skill timing",
         "skill_hold_group": "Key hold duration",
@@ -135,6 +155,12 @@ I18N = {
         "info_worker_body": "The worker thread is still active.",
         "warn_skill_title": "Invalid Skill Sequence",
         "warn_skill_body": "Keep at least one valid step: a non-empty key, or a wait step with gap > 0.",
+        "warn_rethrow_title": "Cannot Rethrow",
+        "warn_rethrow_body": "Please bind the game window first.",
+        "status_rethrowing": "Rethrowing pets...",
+        "status_rethrow_done": "Finished one full pet rethrow cycle.",
+        "status_rethrow_busy": "A rethrow task is already running. Skipping this request.",
+        "status_rethrow_failed": "Pet rethrow did not finish. Check the bound window and click target.",
         "scale_max_x": "Max horizontal offset",
         "scale_max_y": "Max vertical offset",
         "scale_side_speed": "A/D speed",
@@ -167,6 +193,12 @@ class GameAutomation:
         self.skill_interval = 25.0
         # Tab/2/Esc 等按键按住时长（秒）
         self.skill_key_hold_time = 0.12
+        # 重扔精灵：按 1~6 并在每次按键后补一个左键点击
+        self.rethrow_sequence = ["1", "2", "3", "4", "5", "6"]
+        self.rethrow_interval_hours = 0.0
+        self.rethrow_key_hold_time = 0.08
+        self.rethrow_click_gap = 0.15
+        self.rethrow_slot_gap = 0.35
         # 技能序列：每项 dict 含 key / times / gap（见 perform_skill_combo）
         self.skill_steps: List[Dict[str, Any]] = [
             {"key": "tab", "times": 1, "gap": 0.0},
@@ -215,6 +247,8 @@ class GameAutomation:
 
         # 运行态
         self.last_skill_time = 0.0
+        self.last_rethrow_time = 0.0
+        self.rethrow_lock = threading.Lock()
 
     @staticmethod
     def _rand_uniform_range(lo: float, hi: float) -> float:
@@ -263,6 +297,35 @@ class GameAutomation:
             print(f"发送按键失败 {key}: {e}")
             return False
 
+    def send_left_click_to_window(self, screen_point=None):
+        if not self.game_hwnd:
+            print("还没有选中游戏窗口")
+            return False
+
+        try:
+            if screen_point is None:
+                screen_point = win32gui.GetCursorPos()
+
+            left, top, right, bottom = win32gui.GetWindowRect(self.game_hwnd)
+            sx, sy = screen_point
+            if not (left <= sx <= right and top <= sy <= bottom):
+                sx = int((left + right) / 2)
+                sy = int((top + bottom) / 2)
+
+            cx, cy = win32gui.ScreenToClient(self.game_hwnd, (sx, sy))
+            lparam = win32api.MAKELONG(cx, cy)
+            win32api.PostMessage(
+                self.game_hwnd, win32con.WM_LBUTTONDOWN, win32con.MK_LBUTTON, lparam
+            )
+            time.sleep(0.03)
+            win32api.PostMessage(
+                self.game_hwnd, win32con.WM_LBUTTONUP, 0, lparam
+            )
+            return True
+        except Exception as e:
+            print(f"发送鼠标左键失败: {e}")
+            return False
+
     def is_game_foreground(self):
         """仅当绑定的游戏窗口或其子窗口在前台时为 True，避免其它软件里按 Q 误停。"""
         if not self.game_hwnd:
@@ -300,6 +363,19 @@ class GameAutomation:
             elapsed += sleep_chunk
 
         return self.running
+
+    def controlled_sleep(self, total_time, allow_stop_check=True):
+        elapsed = 0.0
+        step = self.check_step if allow_stop_check else min(0.05, total_time if total_time > 0 else 0.05)
+        while elapsed < total_time:
+            if allow_stop_check and self.running and self.should_stop():
+                return False
+            sleep_chunk = min(step, total_time - elapsed)
+            time.sleep(sleep_chunk)
+            elapsed += sleep_chunk
+            if allow_stop_check and self.running and not self.running:
+                return False
+        return True
 
     # =========================
     # 窗口处理
@@ -486,6 +562,47 @@ class GameAutomation:
         self.last_skill_time = time.time()
         return True
 
+    def is_rethrow_due(self):
+        if self.rethrow_interval_hours <= 0:
+            return False
+        return (time.time() - self.last_rethrow_time) >= (
+            self.rethrow_interval_hours * 3600.0
+        )
+
+    def perform_rethrow_all_pets(self):
+        if not self.game_hwnd:
+            print("没有绑定游戏窗口，无法重扔精灵")
+            return False
+
+        if not self.rethrow_lock.acquire(blocking=False):
+            print("已有重扔任务在执行，跳过")
+            return None
+
+        try:
+            click_point = win32gui.GetCursorPos()
+            allow_stop_check = self.running
+            for key in self.rethrow_sequence:
+                if allow_stop_check and self.should_stop():
+                    return False
+                if not self.send_key_to_window(key, self.rethrow_key_hold_time):
+                    return False
+                if not self.controlled_sleep(self.rethrow_click_gap, allow_stop_check):
+                    return False
+                if not self.send_left_click_to_window(click_point):
+                    return False
+                if not self.controlled_sleep(self.rethrow_slot_gap, allow_stop_check):
+                    return False
+
+            self.last_rethrow_time = time.time()
+            return True
+        finally:
+            self.rethrow_lock.release()
+
+    def run_rethrow_if_due(self):
+        if not self.is_rethrow_due():
+            return False
+        return self.perform_rethrow_all_pets()
+
     def wait_with_checks(self, total_wait):
         elapsed = 0.0
 
@@ -494,6 +611,7 @@ class GameAutomation:
                 return
 
             self.cast_skill_if_ready()
+            self.run_rethrow_if_due()
 
             chunk = min(self.check_step, total_wait - elapsed)
             time.sleep(chunk)
@@ -631,6 +749,7 @@ class GameAutomation:
 
         while self.running:
             self.cast_skill_if_ready()
+            self.run_rethrow_if_due()
             self.patrol_move_once()
 
             total_wait = self._rand_uniform_range(
@@ -670,6 +789,10 @@ def _apply_scale_vars_to_automation(auto, vars_bundle):
     )
     auto.skill_interval = float(vars_bundle["skill_interval"].get())
     auto.skill_key_hold_time = float(vars_bundle["skill_key_hold"].get())
+    auto.rethrow_interval_hours = max(0.0, float(vars_bundle["rethrow_interval_hours"].get()))
+    auto.rethrow_key_hold_time = max(0.01, float(vars_bundle["rethrow_key_hold"].get()))
+    auto.rethrow_click_gap = max(0.0, float(vars_bundle["rethrow_click_gap"].get()))
+    auto.rethrow_slot_gap = max(0.0, float(vars_bundle["rethrow_slot_gap"].get()))
 
 
 class AutomationUI:
@@ -712,6 +835,10 @@ class AutomationUI:
             ),
             "skill_interval": tk.DoubleVar(value=self.auto.skill_interval),
             "skill_key_hold": tk.DoubleVar(value=self.auto.skill_key_hold_time),
+            "rethrow_interval_hours": tk.DoubleVar(value=self.auto.rethrow_interval_hours),
+            "rethrow_key_hold": tk.DoubleVar(value=self.auto.rethrow_key_hold_time),
+            "rethrow_click_gap": tk.DoubleVar(value=self.auto.rethrow_click_gap),
+            "rethrow_slot_gap": tk.DoubleVar(value=self.auto.rethrow_slot_gap),
         }
 
         self._skill_rows: List[Dict[str, Any]] = []
@@ -912,6 +1039,12 @@ class AutomationUI:
             style="Secondary.TButton",
         )
         self.reset_button.pack(side=tk.LEFT)
+        self.rethrow_button = ttk.Button(
+            control_card,
+            command=self._on_rethrow,
+            style="Secondary.TButton",
+        )
+        self.rethrow_button.pack(anchor=tk.W, padx=10, pady=(0, 12))
 
         pos_f = ttk.LabelFrame(top_cards)
         pos_f.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, pady=(0, 8))
@@ -983,6 +1116,20 @@ class AutomationUI:
         add_scale(iv, "patrol_center_idle_max", "scale_patrol_center_idle_max", 0.05, 4.0)
         add_scale(iv, "patrol_no_move_idle_min", "scale_patrol_no_move_idle_min", 0.05, 2.0)
         add_scale(iv, "patrol_no_move_idle_max", "scale_patrol_no_move_idle_max", 0.05, 4.0)
+
+        rt = ttk.LabelFrame(tab_move_body)
+        rt.pack(fill=tk.X, **pad)
+        self.rethrow_group = rt
+        self.rethrow_intro_label = ttk.Label(
+            rt,
+            wraplength=560,
+            style="Hint.TLabel",
+        )
+        self.rethrow_intro_label.pack(fill=tk.X, padx=10, pady=(8, 4))
+        add_scale(rt, "rethrow_interval_hours", "scale_rethrow_interval_hours", 0.0, 12.0)
+        add_scale(rt, "rethrow_key_hold", "scale_rethrow_key_hold", 0.02, 0.3)
+        add_scale(rt, "rethrow_click_gap", "scale_rethrow_click_gap", 0.0, 1.0)
+        add_scale(rt, "rethrow_slot_gap", "scale_rethrow_slot_gap", 0.0, 2.0)
 
         tab_skill, tab_skill_body = self._create_scrollable_tab(nb)
         nb.add(tab_skill, text="")
@@ -1393,6 +1540,34 @@ class AutomationUI:
         self.pos_var.set("0.00, 0.00")
         self.status_var.set(self._t("status_reset"))
 
+    def _on_rethrow(self):
+        if not self.auto.game_hwnd:
+            messagebox.showwarning(
+                self._t("warn_rethrow_title"),
+                self._t("warn_rethrow_body"),
+            )
+            return
+
+        _apply_scale_vars_to_automation(self.auto, self.vars)
+        self.status_var.set(self._t("status_rethrowing"))
+
+        def task():
+            result = self.auto.perform_rethrow_all_pets()
+            self.root.after(
+                0,
+                lambda: self.status_var.set(
+                    self._t("status_rethrow_done")
+                    if result is True
+                    else (
+                        self._t("status_rethrow_busy")
+                        if result is None
+                        else self._t("status_rethrow_failed")
+                    )
+                ),
+            )
+
+        threading.Thread(target=task, daemon=True).start()
+
     def _refresh_text(self):
         self.root.title(self._t("window_title"))
         self.hero_title_label.configure(text=self._t("hero_title"))
@@ -1408,6 +1583,7 @@ class AutomationUI:
         self.start_button.configure(text=self._t("btn_start"))
         self.stop_button.configure(text=self._t("btn_stop"))
         self.reset_button.configure(text=self._t("btn_reset"))
+        self.rethrow_button.configure(text=self._t("btn_rethrow"))
         self.position_title.configure(text=self._t("card_position"))
         self.position_desc.configure(text=self._t("card_position_desc"))
         self.notebook.tab(self.tab_move, text=self._t("tab_move"))
@@ -1416,6 +1592,8 @@ class AutomationUI:
         self.range_group.configure(text=self._t("range_group"))
         self.speed_group.configure(text=self._t("speed_group"))
         self.interval_group.configure(text=self._t("interval_group"))
+        self.rethrow_group.configure(text=self._t("rethrow_group"))
+        self.rethrow_intro_label.configure(text=self._t("rethrow_intro"))
         self.skill_intro_label.configure(text=self._t("skill_intro"))
         self.skill_timing_group.configure(text=self._t("skill_timing_group"))
         self.skill_hold_group.configure(text=self._t("skill_hold_group"))
