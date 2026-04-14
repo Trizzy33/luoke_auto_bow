@@ -1,7 +1,9 @@
+import json
 import time
 import random
 import threading
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import tkinter as tk
@@ -50,11 +52,13 @@ I18N = {
         "tab_move": "移动",
         "tab_skill": "技能连招",
         "move_intro": "活动范围越大，角色越容易在更大范围内来回；速度越大，每次按键对应的虚拟位移越大。",
+        "toggle_patrol_enabled": "启用自动走路",
         "range_group": "活动范围（虚拟坐标边界）",
         "speed_group": "移动速度系数",
         "interval_group": "巡逻间隔（秒）",
         "rethrow_group": "重扔精灵",
         "rethrow_intro": "手动点击按钮可立刻执行一次。自动重扔开启后，会按 1 到 6 依次按键，随机等待后发送一次左键，再随机等待更长一点切下一只。",
+        "toggle_rethrow_enabled": "启用自动重扔",
         "scale_rethrow_interval_hours": "自动重扔间隔(小时)",
         "scale_rethrow_key_hold": "左键按住时长",
         "scale_rethrow_click_gap": "按键后点击等待",
@@ -133,11 +137,13 @@ I18N = {
         "tab_move": "Movement",
         "tab_skill": "Skills",
         "move_intro": "A larger range allows wider roaming. Higher speed makes each key press count as more virtual movement.",
+        "toggle_patrol_enabled": "Enable auto movement",
         "range_group": "Range (virtual bounds)",
         "speed_group": "Movement speed",
         "interval_group": "Patrol timing (seconds)",
         "rethrow_group": "Pet Rethrow",
         "rethrow_intro": "Use the button to trigger it immediately. Auto rethrow will press 1 through 6, wait a bit, send one left-click, then wait longer before moving to the next pet.",
+        "toggle_rethrow_enabled": "Enable auto rethrow",
         "scale_rethrow_interval_hours": "Auto rethrow interval (hours)",
         "scale_rethrow_key_hold": "Left click hold",
         "scale_rethrow_click_gap": "Wait before click",
@@ -206,7 +212,8 @@ class GameAutomation:
         self.skill_key_hold_time = 0.12
         # 重扔精灵：按 1~6 并在每次按键后补一个左键点击
         self.rethrow_sequence = ["1", "2", "3", "4", "5", "6"]
-        self.rethrow_interval_hours = 0.0
+        self.rethrow_enabled = False
+        self.rethrow_interval_hours = 2.0
         self.rethrow_click_gap = 0.5
         self.rethrow_slot_gap = 1.0
         self.rethrow_click_hold_time = 0.3
@@ -221,6 +228,7 @@ class GameAutomation:
         ]
 
         # 主循环：每轮「巡逻移动」结束后的大段等待（秒，可在 UI 调）
+        self.patrol_enabled = True
         self.loop_wait_min = 20.0
         self.loop_wait_max = 40.0
         # 长等待中每隔多久检查一次 Q / 技能（秒）
@@ -295,8 +303,20 @@ class GameAutomation:
     # 基础工具
     # =========================
 
+    @staticmethod
+    def normalize_action_key(raw_key: Any) -> str:
+        text = "" if raw_key is None else str(raw_key)
+        if text == "":
+            return ""
+        if text.strip() == "":
+            return "space"
+        normalized = text.strip().lower()
+        if normalized in ("spacebar", "blank"):
+            return "space"
+        return normalized
+
     def key_to_vk(self, key: str):
-        key = key.lower()
+        key = self.normalize_action_key(key)
 
         if len(key) == 1 and key.isalpha():
             return 0x41 + ord(key) - ord('a')
@@ -412,6 +432,16 @@ class GameAutomation:
             elapsed += sleep_chunk
             if allow_stop_check and self.running and not self.running:
                 return False
+        return True
+
+    def is_rethrowing(self) -> bool:
+        return self.rethrow_lock.locked()
+
+    def wait_until_rethrow_finished(self) -> bool:
+        while self.is_rethrowing():
+            if self.running and self.should_stop():
+                return False
+            time.sleep(0.05)
         return True
 
     # =========================
@@ -552,7 +582,7 @@ class GameAutomation:
             if self.should_stop():
                 return False
 
-            raw_key = str(step.get("key", "")).strip().lower()
+            raw_key = self.normalize_action_key(step.get("key", ""))
             try:
                 times = max(1, int(step.get("times", 1)))
             except (TypeError, ValueError):
@@ -589,6 +619,8 @@ class GameAutomation:
         return True
 
     def cast_skill_if_ready(self):
+        if self.is_rethrowing():
+            return False
         if not self.is_skill_ready():
             return False
 
@@ -600,6 +632,8 @@ class GameAutomation:
         return True
 
     def is_rethrow_due(self):
+        if not self.rethrow_enabled:
+            return False
         if self.rethrow_interval_hours <= 0:
             return False
         return (time.time() - self.last_rethrow_time) >= (
@@ -653,6 +687,11 @@ class GameAutomation:
         while elapsed < total_wait and self.running:
             if self.should_stop():
                 return
+
+            if self.is_rethrowing():
+                if not self.wait_until_rethrow_finished():
+                    return
+                continue
 
             self.cast_skill_if_ready()
             self.run_rethrow_if_due()
@@ -742,6 +781,10 @@ class GameAutomation:
     # =========================
 
     def patrol_move_once(self):
+        if not self.patrol_enabled:
+            return
+        if self.is_rethrowing():
+            return
         print(f"[before] x={self.virtual_x:.2f}, y={self.virtual_y:.2f}")
 
         if self.is_near_center() and random.random() < self.center_idle_chance:
@@ -790,11 +833,17 @@ class GameAutomation:
         print("Started. Press Q only while the game window is focused to stop.")
         self.running = True
         self.last_skill_time = 0.0
+        self.last_rethrow_time = time.time()
 
         while self.running:
+            if self.is_rethrowing():
+                if not self.wait_until_rethrow_finished():
+                    break
+                continue
             self.cast_skill_if_ready()
             self.run_rethrow_if_due()
-            self.patrol_move_once()
+            if self.patrol_enabled:
+                self.patrol_move_once()
 
             total_wait = self._rand_uniform_range(
                 self.loop_wait_min, self.loop_wait_max
@@ -833,7 +882,9 @@ def _apply_scale_vars_to_automation(auto, vars_bundle):
     for var_key, attr_name in plain_mappings.items():
         setattr(auto, attr_name, float(vars_bundle[var_key].get()))
 
+    auto.patrol_enabled = bool(vars_bundle["patrol_enabled"].get())
     auto.check_step = max(0.05, float(vars_bundle["check_step"].get()))
+    auto.rethrow_enabled = bool(vars_bundle["rethrow_enabled"].get())
     auto.rethrow_interval_hours = max(
         0.0, float(vars_bundle["rethrow_interval_hours"].get())
     )
@@ -853,6 +904,9 @@ class AutomationUI:
     def __init__(self):
         self.auto = GameAutomation()
         self.worker: Optional[threading.Thread] = None
+        self.settings_path = Path(__file__).with_name("lk_config.json")
+        self._last_saved_snapshot: Optional[Dict[str, Any]] = None
+        self._loaded_settings = self._load_persisted_settings()
 
         self.root = tk.Tk()
         self.current_lang = tk.StringVar(value="zh")
@@ -868,6 +922,7 @@ class AutomationUI:
             "max_y": tk.DoubleVar(value=self.auto.max_y_offset),
             "side_speed": tk.DoubleVar(value=self.auto.side_speed_factor),
             "forward_speed": tk.DoubleVar(value=self.auto.forward_speed_factor),
+            "patrol_enabled": tk.BooleanVar(value=self.auto.patrol_enabled),
             "loop_wait_min": tk.DoubleVar(value=self.auto.loop_wait_min),
             "loop_wait_max": tk.DoubleVar(value=self.auto.loop_wait_max),
             "check_step": tk.DoubleVar(value=self.auto.check_step),
@@ -887,6 +942,7 @@ class AutomationUI:
             ),
             "skill_interval": tk.DoubleVar(value=self.auto.skill_interval),
             "skill_key_hold": tk.DoubleVar(value=self.auto.skill_key_hold_time),
+            "rethrow_enabled": tk.BooleanVar(value=self.auto.rethrow_enabled),
             "rethrow_interval_hours": tk.DoubleVar(value=self.auto.rethrow_interval_hours),
             "rethrow_key_hold": tk.DoubleVar(value=self.auto.rethrow_click_hold_time),
             "rethrow_click_gap": tk.DoubleVar(value=self.auto.rethrow_click_gap),
@@ -908,11 +964,71 @@ class AutomationUI:
         self._configure_styles()
         self._build_layout()
         self._skill_load_from_automation_defaults()
+        self._apply_loaded_settings()
         self._refresh_text()
         self.root.after(120, self._tick)
 
     def _t(self, key: str):
         return I18N[self.current_lang.get()][key]
+
+    def _load_persisted_settings(self) -> Dict[str, Any]:
+        if not self.settings_path.exists():
+            return {}
+        try:
+            return json.loads(self.settings_path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+
+    def _skill_load_steps(self, steps: List[Dict[str, Any]]):
+        self._skill_clear_all_rows()
+        for st in steps:
+            self._skill_add_row(
+                str(st.get("key", "")),
+                int(st.get("times", 1)),
+                float(st.get("gap", 0.0)),
+            )
+
+    def _apply_loaded_settings(self):
+        settings = self._loaded_settings or {}
+        saved_vars = settings.get("vars", {})
+        for key, value in saved_vars.items():
+            if key in self.vars:
+                self.vars[key].set(value)
+
+        saved_lang = settings.get("lang")
+        if saved_lang in I18N:
+            self.current_lang.set(saved_lang)
+
+        saved_steps = settings.get("skill_steps")
+        if isinstance(saved_steps, list) and saved_steps:
+            self._skill_load_steps(saved_steps)
+
+        _apply_scale_vars_to_automation(self.auto, self.vars)
+        self.auto.skill_steps = self._skill_steps_from_ui()
+        self._last_saved_snapshot = self._snapshot_settings()
+
+    def _snapshot_settings(self) -> Dict[str, Any]:
+        return {
+            "lang": self.current_lang.get(),
+            "vars": {
+                key: round(float(var.get()), 4)
+                for key, var in self.vars.items()
+            },
+            "skill_steps": self._skill_steps_from_ui(),
+        }
+
+    def _persist_settings_if_needed(self):
+        snapshot = self._snapshot_settings()
+        if snapshot == self._last_saved_snapshot:
+            return
+        try:
+            self.settings_path.write_text(
+                json.dumps(snapshot, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            self._last_saved_snapshot = snapshot
+        except Exception:
+            pass
 
     def _configure_styles(self):
         style = ttk.Style()
@@ -1139,6 +1255,11 @@ class AutomationUI:
             style="Hint.TLabel",
         )
         self.move_intro_label.pack(fill=tk.X, **pad)
+        self.patrol_enabled_check = ttk.Checkbutton(
+            tab_move_body,
+            variable=self.vars["patrol_enabled"],
+        )
+        self.patrol_enabled_check.pack(anchor=tk.W, padx=10, pady=(0, 4))
         rng = ttk.LabelFrame(tab_move_body)
         rng.pack(fill=tk.X, **pad)
         self.range_group = rng
@@ -1179,6 +1300,11 @@ class AutomationUI:
             style="Hint.TLabel",
         )
         self.rethrow_intro_label.pack(fill=tk.X, padx=10, pady=(8, 4))
+        self.rethrow_enabled_check = ttk.Checkbutton(
+            rt,
+            variable=self.vars["rethrow_enabled"],
+        )
+        self.rethrow_enabled_check.pack(anchor=tk.W, padx=10, pady=(0, 4))
         add_scale(rt, "rethrow_interval_hours", "scale_rethrow_interval_hours", 0.0, 12.0)
         add_scale(rt, "rethrow_key_hold", "scale_rethrow_key_hold", 0.02, 0.8)
         add_scale(rt, "rethrow_click_gap", "scale_rethrow_click_gap", 0.0, 1.0)
@@ -1470,18 +1596,12 @@ class AutomationUI:
         self._dragging_skill_row = None
 
     def _skill_load_from_automation_defaults(self):
-        self._skill_clear_all_rows()
-        for st in self.auto.skill_steps:
-            self._skill_add_row(
-                str(st.get("key", "")),
-                int(st.get("times", 1)),
-                float(st.get("gap", 0.0)),
-            )
+        self._skill_load_steps(self.auto.skill_steps)
 
     def _skill_steps_from_ui(self) -> List[Dict[str, Any]]:
         out: List[Dict[str, Any]] = []
         for row in self._skill_rows:
-            raw_k = row["key"].get().strip()
+            raw_k = row["key"].get()
             try:
                 ti = int(row["times"].get().strip())
             except (ValueError, AttributeError):
@@ -1493,7 +1613,7 @@ class AutomationUI:
                 gf = 0.0
             out.append(
                 {
-                    "key": raw_k,
+                    "key": GameAutomation.normalize_action_key(raw_k),
                     "times": max(1, ti),
                     "gap": max(0.0, gf),
                 }
@@ -1502,7 +1622,7 @@ class AutomationUI:
 
     def _skill_sequence_has_valid_step(self) -> bool:
         for row in self._skill_rows:
-            k = row["key"].get().strip().lower()
+            k = GameAutomation.normalize_action_key(row["key"].get())
             gs = row["gap"].get().strip().replace(",", ".")
             try:
                 gf = float(gs) if gs else 0.0
@@ -1527,6 +1647,7 @@ class AutomationUI:
         elif self.auto.game_hwnd:
             self.status_var.set(self._t("status_bound"))
         self._update_header_metrics()
+        self._persist_settings_if_needed()
         self.root.after(120, self._tick)
 
     def _on_bind(self):
@@ -1643,11 +1764,13 @@ class AutomationUI:
         self.notebook.tab(self.tab_move, text=self._t("tab_move"))
         self.notebook.tab(self.tab_skill, text=self._t("tab_skill"))
         self.move_intro_label.configure(text=self._t("move_intro"))
+        self.patrol_enabled_check.configure(text=self._t("toggle_patrol_enabled"))
         self.range_group.configure(text=self._t("range_group"))
         self.speed_group.configure(text=self._t("speed_group"))
         self.interval_group.configure(text=self._t("interval_group"))
         self.rethrow_group.configure(text=self._t("rethrow_group"))
         self.rethrow_intro_label.configure(text=self._t("rethrow_intro"))
+        self.rethrow_enabled_check.configure(text=self._t("toggle_rethrow_enabled"))
         self.skill_intro_label.configure(text=self._t("skill_intro"))
         self.skill_timing_group.configure(text=self._t("skill_timing_group"))
         self.skill_hold_group.configure(text=self._t("skill_hold_group"))
